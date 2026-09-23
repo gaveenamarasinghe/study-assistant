@@ -11,38 +11,37 @@ import { GoogleGenAI } from "@google/genai";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load .env explicitly from the project root
-const envPath = path.resolve(process.cwd(), ".env");
+// Load .env locally.
+// On Vercel, GEMINI_API_KEY comes from Vercel Environment Variables.
+if (!process.env.VERCEL) {
+  const envPath = path.resolve(process.cwd(), ".env");
 
-dotenv.config({
-  path: envPath,
-  override: true,
-});
+  dotenv.config({
+    path: envPath,
+    override: false,
+  });
 
-console.log("======================================");
-console.log("Starting server...");
-console.log("Working directory:", process.cwd());
-console.log(".env path:", envPath);
-console.log(
-  "GEMINI_API_KEY:",
-  process.env.GEMINI_API_KEY ? "LOADED" : "NOT LOADED"
-);
-console.log("======================================");
-
+  console.log("======================================");
+  console.log("Local environment");
+  console.log("Working directory:", process.cwd());
+  console.log(".env path:", envPath);
+  console.log(
+    "GEMINI_API_KEY:",
+    process.env.GEMINI_API_KEY ? "LOADED" : "NOT LOADED"
+  );
+  console.log("======================================");
+}
 
 // ============================================================
 // GEMINI CONFIGURATION
 // ============================================================
 
-// Primary model
 const PRIMARY_MODEL = "gemini-3.8-flash";
 
-// Fallback models
 const FALLBACK_MODELS = [
   "gemini-3.7-flash",
   "gemini-3.6-flash",
 ];
-
 
 // ============================================================
 // GEMINI CLIENT
@@ -53,7 +52,7 @@ function getGeminiClient(): GoogleGenAI {
 
   if (!apiKey) {
     throw new Error(
-      "GEMINI_API_KEY is missing or empty. Check your .env file."
+      "GEMINI_API_KEY is missing. Add GEMINI_API_KEY to Vercel Environment Variables."
     );
   }
 
@@ -61,7 +60,6 @@ function getGeminiClient(): GoogleGenAI {
     apiKey,
   });
 }
-
 
 // ============================================================
 // ERROR HELPERS
@@ -83,7 +81,6 @@ function getErrorText(error: unknown): string {
   }
 }
 
-
 function isRetryableGeminiError(error: unknown): boolean {
   const message = getErrorText(error).toLowerCase();
 
@@ -100,7 +97,6 @@ function isRetryableGeminiError(error: unknown): boolean {
   );
 }
 
-
 // ============================================================
 // WAIT / BACKOFF
 // ============================================================
@@ -109,18 +105,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-
 function getBackoffDelay(attempt: number): number {
-  // 3s, 6s, 12s, 24s, 30s max
-  const base = Math.min(30000, 3000 * Math.pow(2, attempt));
+  const base = Math.min(
+    30000,
+    3000 * Math.pow(2, attempt)
+  );
 
-  // Small random amount prevents multiple requests retrying
-  // at exactly the same time.
   const jitter = Math.floor(Math.random() * 1000);
 
   return base + jitter;
 }
-
 
 // ============================================================
 // GEMINI REQUEST
@@ -130,51 +124,51 @@ async function generateWithModel(
   client: GoogleGenAI,
   model: string,
   params: any,
-  maxRetries = 5
+  maxRetries = 3
 ): Promise<any> {
   let lastError: unknown;
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  for (
+    let attempt = 0;
+    attempt <= maxRetries;
+    attempt++
+  ) {
     try {
       console.log(
-        `[Gemini] Model: ${model} | Attempt: ${attempt + 1}/${maxRetries + 1}`
+        `[Gemini] ${model} attempt ${attempt + 1}/${maxRetries + 1}`
       );
 
-      const response = await client.models.generateContent({
-        ...params,
-        model,
-      });
+      const response =
+        await client.models.generateContent({
+          ...params,
+          model,
+        });
 
-      console.log(`[Gemini] Success using ${model}`);
+      console.log(
+        `[Gemini] Success using ${model}`
+      );
 
       return response;
     } catch (error) {
       lastError = error;
 
-      const errorText = getErrorText(error);
-
       console.error(
-        `[Gemini] ${model} failed on attempt ${attempt + 1}:`,
-        errorText
+        `[Gemini] ${model} failed:`,
+        getErrorText(error)
       );
 
-      // Do not retry permanent errors.
       if (!isRetryableGeminiError(error)) {
         throw error;
       }
 
-      // Finished retrying this model.
       if (attempt >= maxRetries) {
-        console.error(
-          `[Gemini] ${model} failed after ${maxRetries + 1} attempts.`
-        );
         break;
       }
 
       const delay = getBackoffDelay(attempt);
 
       console.log(
-        `[Gemini] Temporary error. Retrying ${model} in ${delay}ms...`
+        `[Gemini] Retrying ${model} in ${delay}ms`
       );
 
       await sleep(delay);
@@ -183,7 +177,6 @@ async function generateWithModel(
 
   throw lastError;
 }
-
 
 // ============================================================
 // GEMINI REQUEST WITH FALLBACK MODELS
@@ -207,26 +200,22 @@ async function generateWithRetry(
         client,
         model,
         params,
-        4
+        3
       );
     } catch (error) {
       lastError = error;
 
-      const errorText = getErrorText(error);
-
       console.error(
-        `[Gemini] Model ${model} unavailable:`,
-        errorText
+        `[Gemini] ${model} failed completely:`,
+        getErrorText(error)
       );
 
-      // If this is not a temporary error, stop immediately.
       if (!isRetryableGeminiError(error)) {
         throw error;
       }
 
-      // Otherwise move to the next model.
       console.log(
-        `[Gemini] Trying fallback model after ${model}...`
+        `[Gemini] Moving to fallback model...`
       );
     }
   }
@@ -234,22 +223,28 @@ async function generateWithRetry(
   throw lastError;
 }
 
-
 // ============================================================
-// RESPONSE TEXT HELPER
+// RESPONSE TEXT
 // ============================================================
 
-function getResponseText(response: any): string {
+function getResponseText(
+  response: any
+): string {
   const text = response?.text;
 
-  if (typeof text === "string" && text.trim()) {
+  if (
+    typeof text === "string" &&
+    text.trim()
+  ) {
     return text.trim();
   }
 
-  // Some SDK versions expose the text through candidates.
   const candidateText =
     response?.candidates?.[0]?.content?.parts
-      ?.map((part: any) => part?.text || "")
+      ?.map(
+        (part: any) =>
+          part?.text || ""
+      )
       .join("")
       .trim();
 
@@ -257,18 +252,20 @@ function getResponseText(response: any): string {
     return candidateText;
   }
 
-  throw new Error("Gemini returned an empty response.");
+  throw new Error(
+    "Gemini returned an empty response."
+  );
 }
-
 
 // ============================================================
 // JSON PARSER
 // ============================================================
 
-function parseGeminiJson(response: any): any {
+function parseGeminiJson(
+  response: any
+): any {
   const text = getResponseText(response);
 
-  // Remove markdown code fences if Gemini returns them.
   const cleaned = text
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
@@ -277,8 +274,11 @@ function parseGeminiJson(response: any): any {
 
   try {
     return JSON.parse(cleaned);
-  } catch (error) {
-    console.error("Failed to parse Gemini JSON:");
+  } catch {
+    console.error(
+      "Gemini returned invalid JSON:"
+    );
+
     console.error(cleaned);
 
     throw new Error(
@@ -287,202 +287,228 @@ function parseGeminiJson(response: any): any {
   }
 }
 
-
 // ============================================================
 // EXPRESS APP
 // ============================================================
 
 const app = express();
 
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(
+  express.json({
+    limit: "10mb",
+  })
+);
 
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
 
 // ============================================================
 // HEALTH CHECK
 // ============================================================
 
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.json({
-    success: true,
-    geminiKeyLoaded: Boolean(
-      process.env.GEMINI_API_KEY?.trim()
-    ),
-    primaryModel: PRIMARY_MODEL,
-    fallbackModels: FALLBACK_MODELS,
-  });
-});
+app.get(
+  "/api/health",
+  (_req: Request, res: Response) => {
+    res.json({
+      success: true,
 
+      geminiKeyLoaded:
+        Boolean(
+          process.env.GEMINI_API_KEY?.trim()
+        ),
 
-// ============================================================
-// YOUR EXISTING ROUTES
-// ============================================================
-//
-// IMPORTANT:
-// Keep your existing /api/generate-notes,
-// /api/summarize-notes,
-// /api/generate-quiz,
-// /api/evaluate-answer,
-// /api/ask-tutor routes.
-//
-// The ONLY important change inside those routes is:
-//
-// OLD:
-//
-// const response = await generateWithRetry({
-//   model: "gemini-3.8-flash",
-//   contents: prompt,
-//   config: {...}
-// });
-//
-// NEW:
-//
-// const response = await generateWithRetry({
-//   contents: prompt,
-//   config: {...}
-// });
-//
-// Notice that "model" is removed.
-//
-// generateWithRetry() automatically tries:
-//
-// 1. gemini-3.8-flash
-// 2. gemini-3.7-flash
-// 3. gemini-3.6-flash
-//
-// and retries temporary 503/429 errors before switching models.
-//
-// ============================================================
+      primaryModel:
+        PRIMARY_MODEL,
 
+      fallbackModels:
+        FALLBACK_MODELS,
+
+      environment:
+        process.env.VERCEL
+          ? "vercel"
+          : "local",
+    });
+  }
+);
 
 // ============================================================
-// EXAMPLE: GENERATE NOTES
-// ============================================================
-//
-// Replace the body of your existing generate-notes route
-// with your existing prompt/schema if necessary.
-//
+// GENERATE NOTES
 // ============================================================
 
 app.post(
   "/api/generate-notes",
-  async (req: Request, res: Response) => {
+  async (
+    req: Request,
+    res: Response
+  ) => {
     try {
-      const { text, content } = req.body;
+      const {
+        text,
+        content,
+        topic,
+        level,
+        depth,
+        focusArea,
+      } = req.body;
 
-      const sourceText = text || content;
+      const sourceText =
+        text ||
+        content ||
+        topic;
 
-      if (!sourceText || !String(sourceText).trim()) {
+      if (
+        !sourceText ||
+        !String(sourceText).trim()
+      ) {
         return res.status(400).json({
-          error: "Text/content is required.",
+          error:
+            "Text/content is required.",
         });
       }
 
       const prompt = `
-Create clear study notes from the following material.
+Create comprehensive study notes.
 
-Return useful, accurate notes with:
-- Main topics
-- Important concepts
-- Key points
-- Definitions
-- Examples where useful
+Topic:
+${topic || "General topic"}
+
+Student level:
+${level || "General"}
+
+Depth:
+${depth || "Detailed"}
+
+Focus area:
+${focusArea || "General"}
 
 Study material:
-
 ${String(sourceText)}
+
+Create clear, accurate, well-organized study notes.
+
+Include:
+- Main topics
+- Important concepts
+- Definitions
+- Explanations
+- Examples where useful
+- Key points
+
+Make the material easy for a student to study.
 `;
 
-      const response = await generateWithRetry({
-        contents: prompt,
+      const response =
+        await generateWithRetry({
+          contents: prompt,
 
-        config: {
-          responseMimeType: "application/json",
+          config: {
+            responseMimeType:
+              "application/json",
 
-          responseSchema: {
-            type: "object",
-            properties: {
-              title: {
-                type: "string",
-              },
+            responseSchema: {
+              type: "object",
 
-              summary: {
-                type: "string",
-              },
+              properties: {
+                title: {
+                  type: "string",
+                },
 
-              sections: {
-                type: "array",
-                items: {
-                  type: "object",
-                  properties: {
-                    heading: {
-                      type: "string",
-                    },
+                summary: {
+                  type: "string",
+                },
 
-                    content: {
-                      type: "string",
-                    },
+                sections: {
+                  type: "array",
 
-                    keyPoints: {
-                      type: "array",
-                      items: {
+                  items: {
+                    type: "object",
+
+                    properties: {
+                      heading: {
                         type: "string",
                       },
-                    },
-                  },
 
-                  required: [
-                    "heading",
-                    "content",
-                    "keyPoints",
-                  ],
+                      content: {
+                        type: "string",
+                      },
+
+                      keyPoints: {
+                        type: "array",
+
+                        items: {
+                          type: "string",
+                        },
+                      },
+                    },
+
+                    required: [
+                      "heading",
+                      "content",
+                      "keyPoints",
+                    ],
+                  },
                 },
               },
+
+              required: [
+                "title",
+                "summary",
+                "sections",
+              ],
             },
-
-            required: [
-              "title",
-              "summary",
-              "sections",
-            ],
           },
-        },
-      });
+        });
 
-      const result = parseGeminiJson(response);
+      const result =
+        parseGeminiJson(response);
 
       return res.json(result);
-
     } catch (error) {
       console.error(
         "Error generating notes:",
-        error
+        getErrorText(error)
       );
 
-      return res.status(503).json({
+      return res.status(500).json({
         error:
-          "Gemini is temporarily busy. Please try again in a few seconds.",
+          getErrorText(error),
       });
     }
   }
 );
 
-
 // ============================================================
-// EXAMPLE: SUMMARIZE NOTES
+// SUMMARIZE NOTES
 // ============================================================
 
 app.post(
   "/api/summarize-notes",
-  async (req: Request, res: Response) => {
+  async (
+    req: Request,
+    res: Response
+  ) => {
     try {
-      const { text, content } = req.body;
+      const {
+        text,
+        content,
+        notesText,
+      } = req.body;
 
-      const sourceText = text || content;
+      const sourceText =
+        text ||
+        content ||
+        notesText;
 
-      if (!sourceText || !String(sourceText).trim()) {
+      if (
+        !sourceText ||
+        !String(sourceText).trim()
+      ) {
         return res.status(400).json({
-          error: "Text/content is required.",
+          error:
+            "Text/content is required.",
         });
       }
 
@@ -495,190 +521,229 @@ Create:
 - Important facts to remember
 - Key takeaways
 
-Material:
+Study material:
 
 ${String(sourceText)}
 `;
 
-      const response = await generateWithRetry({
-        contents: prompt,
+      const response =
+        await generateWithRetry({
+          contents: prompt,
 
-        config: {
-          responseMimeType: "application/json",
+          config: {
+            responseMimeType:
+              "application/json",
 
-          responseSchema: {
-            type: "object",
-            properties: {
-              summary: {
-                type: "string",
-              },
+            responseSchema: {
+              type: "object",
 
-              keyPoints: {
-                type: "array",
-                items: {
+              properties: {
+                summary: {
                   type: "string",
+                },
+
+                keyPoints: {
+                  type: "array",
+
+                  items: {
+                    type: "string",
+                  },
+                },
+
+                takeaways: {
+                  type: "array",
+
+                  items: {
+                    type: "string",
+                  },
                 },
               },
 
-              takeaways: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-              },
+              required: [
+                "summary",
+                "keyPoints",
+                "takeaways",
+              ],
             },
-
-            required: [
-              "summary",
-              "keyPoints",
-              "takeaways",
-            ],
           },
-        },
-      });
+        });
 
-      const result = parseGeminiJson(response);
+      const result =
+        parseGeminiJson(response);
 
       return res.json(result);
-
     } catch (error) {
       console.error(
         "Error summarizing notes:",
-        error
+        getErrorText(error)
       );
 
-      return res.status(503).json({
+      return res.status(500).json({
         error:
-          "Gemini is temporarily busy. Please try again in a few seconds.",
+          getErrorText(error),
       });
     }
   }
 );
 
-
 // ============================================================
-// EXAMPLE: GENERATE QUIZ
+// GENERATE QUIZ
 // ============================================================
 
 app.post(
   "/api/generate-quiz",
-  async (req: Request, res: Response) => {
+  async (
+    req: Request,
+    res: Response
+  ) => {
     try {
-      const { text, content, numberOfQuestions } =
-        req.body;
+      const {
+        text,
+        content,
+        notesText,
+        numberOfQuestions,
+        questionCount,
+        topic,
+        difficulty,
+      } = req.body;
 
-      const sourceText = text || content;
+      const sourceText =
+        text ||
+        content ||
+        notesText;
 
-      if (!sourceText || !String(sourceText).trim()) {
+      if (
+        !sourceText ||
+        !String(sourceText).trim()
+      ) {
         return res.status(400).json({
-          error: "Text/content is required.",
+          error:
+            "Text/content is required.",
         });
       }
 
+      const requestedCount =
+        numberOfQuestions ??
+        questionCount;
+
       const count =
-        Number(numberOfQuestions) > 0
-          ? Math.min(Number(numberOfQuestions), 20)
-          : 10;
+        Number(requestedCount) > 0
+          ? Math.min(
+              Number(requestedCount),
+              20
+            )
+          : 6;
 
       const prompt = `
-Create a study quiz from the following material.
+Create a study quiz.
 
-Generate exactly ${count} multiple-choice questions.
+Topic:
+${topic || "General"}
+
+Difficulty:
+${difficulty || "Medium"}
+
+Generate exactly ${count}
+multiple-choice questions.
 
 Each question must contain:
 - question
-- four answer options
+- exactly four answer options
 - correct answer
 - explanation
 
-Only use information from the supplied material.
+Only use information from the supplied study material.
 
-Material:
+Study material:
 
 ${String(sourceText)}
 `;
 
-      const response = await generateWithRetry({
-        contents: prompt,
+      const response =
+        await generateWithRetry({
+          contents: prompt,
 
-        config: {
-          responseMimeType: "application/json",
+          config: {
+            responseMimeType:
+              "application/json",
 
-          responseSchema: {
-            type: "object",
+            responseSchema: {
+              type: "object",
 
-            properties: {
-              questions: {
-                type: "array",
+              properties: {
+                questions: {
+                  type: "array",
 
-                items: {
-                  type: "object",
+                  items: {
+                    type: "object",
 
-                  properties: {
-                    question: {
-                      type: "string",
-                    },
+                    properties: {
+                      question: {
+                        type: "string",
+                      },
 
-                    options: {
-                      type: "array",
+                      options: {
+                        type: "array",
 
-                      items: {
+                        items: {
+                          type: "string",
+                        },
+                      },
+
+                      correctAnswer: {
+                        type: "string",
+                      },
+
+                      explanation: {
                         type: "string",
                       },
                     },
 
-                    correctAnswer: {
-                      type: "string",
-                    },
-
-                    explanation: {
-                      type: "string",
-                    },
+                    required: [
+                      "question",
+                      "options",
+                      "correctAnswer",
+                      "explanation",
+                    ],
                   },
-
-                  required: [
-                    "question",
-                    "options",
-                    "correctAnswer",
-                    "explanation",
-                  ],
                 },
               },
+
+              required: [
+                "questions",
+              ],
             },
-
-            required: [
-              "questions",
-            ],
           },
-        },
-      });
+        });
 
-      const result = parseGeminiJson(response);
+      const result =
+        parseGeminiJson(response);
 
       return res.json(result);
-
     } catch (error) {
       console.error(
         "Error generating quiz:",
-        error
+        getErrorText(error)
       );
 
-      return res.status(503).json({
+      return res.status(500).json({
         error:
-          "Gemini is temporarily busy. Please try again in a few seconds.",
+          getErrorText(error),
       });
     }
   }
 );
 
-
 // ============================================================
-// EXAMPLE: EVALUATE ANSWER
+// EVALUATE ANSWER
 // ============================================================
 
 app.post(
   "/api/evaluate-answer",
-  async (req: Request, res: Response) => {
+  async (
+    req: Request,
+    res: Response
+  ) => {
     try {
       const {
         question,
@@ -686,7 +751,10 @@ app.post(
         correctAnswer,
       } = req.body;
 
-      if (!question || !answer) {
+      if (
+        !question ||
+        !answer
+      ) {
         return res.status(400).json({
           error:
             "Question and answer are required.",
@@ -705,76 +773,80 @@ ${answer}
 Expected/correct answer:
 ${correctAnswer || "Not provided"}
 
-Return a fair evaluation with:
+Return:
 - whether the answer is correct
 - score from 0 to 100
 - explanation
-- improvement advice
+- feedback
 `;
 
-      const response = await generateWithRetry({
-        contents: prompt,
+      const response =
+        await generateWithRetry({
+          contents: prompt,
 
-        config: {
-          responseMimeType: "application/json",
+          config: {
+            responseMimeType:
+              "application/json",
 
-          responseSchema: {
-            type: "object",
+            responseSchema: {
+              type: "object",
 
-            properties: {
-              correct: {
-                type: "boolean",
+              properties: {
+                correct: {
+                  type: "boolean",
+                },
+
+                score: {
+                  type: "number",
+                },
+
+                explanation: {
+                  type: "string",
+                },
+
+                feedback: {
+                  type: "string",
+                },
               },
 
-              score: {
-                type: "number",
-              },
-
-              explanation: {
-                type: "string",
-              },
-
-              feedback: {
-                type: "string",
-              },
+              required: [
+                "correct",
+                "score",
+                "explanation",
+                "feedback",
+              ],
             },
-
-            required: [
-              "correct",
-              "score",
-              "explanation",
-              "feedback",
-            ],
           },
-        },
-      });
+        });
 
-      const result = parseGeminiJson(response);
+      const result =
+        parseGeminiJson(response);
 
       return res.json(result);
-
     } catch (error) {
       console.error(
         "Error evaluating answer:",
-        error
+        getErrorText(error)
       );
 
-      return res.status(503).json({
+      return res.status(500).json({
         error:
-          "Gemini is temporarily busy. Please try again in a few seconds.",
+          getErrorText(error),
       });
     }
   }
 );
 
-
 // ============================================================
-// EXAMPLE: ASK TUTOR
+// ASK TUTOR
 // ============================================================
 
 app.post(
   "/api/ask-tutor",
-  async (req: Request, res: Response) => {
+  async (
+    req: Request,
+    res: Response
+  ) => {
     try {
       const {
         question,
@@ -782,91 +854,100 @@ app.post(
         notes,
       } = req.body;
 
-      if (!question || !String(question).trim()) {
+      if (
+        !question ||
+        !String(question).trim()
+      ) {
         return res.status(400).json({
-          error: "Question is required.",
+          error:
+            "Question is required.",
         });
       }
 
       const prompt = `
 You are a helpful study tutor.
 
-Answer the student's question clearly and accurately.
+Answer the student's question clearly
+and accurately.
 
 Use the supplied study material when available.
+
 Explain difficult concepts simply.
-Do not invent facts that are not supported by the material.
+
+Do not invent facts that are not supported
+by the material.
 
 Study material:
+
 ${context || notes || "No additional material supplied."}
 
 Student question:
+
 ${question}
 `;
 
-      const response = await generateWithRetry({
-        contents: prompt,
+      const response =
+        await generateWithRetry({
+          contents: prompt,
 
-        config: {
-          responseMimeType: "application/json",
+          config: {
+            responseMimeType:
+              "application/json",
 
-          responseSchema: {
-            type: "object",
+            responseSchema: {
+              type: "object",
 
-            properties: {
-              answer: {
-                type: "string",
-              },
-
-              keyPoints: {
-                type: "array",
-
-                items: {
+              properties: {
+                answer: {
                   type: "string",
                 },
+
+                keyPoints: {
+                  type: "array",
+
+                  items: {
+                    type: "string",
+                  },
+                },
               },
+
+              required: [
+                "answer",
+                "keyPoints",
+              ],
             },
-
-            required: [
-              "answer",
-              "keyPoints",
-            ],
           },
-        },
-      });
+        });
 
-      const result = parseGeminiJson(response);
+      const result =
+        parseGeminiJson(response);
 
       return res.json(result);
-
     } catch (error) {
       console.error(
         "Error asking tutor:",
-        error
+        getErrorText(error)
       );
 
-      return res.status(503).json({
+      return res.status(500).json({
         error:
-          "Gemini is temporarily busy. Please try again in a few seconds.",
+          getErrorText(error),
       });
     }
   }
 );
 
-
 // ============================================================
-// VITE
+// LOCAL DEVELOPMENT
 // ============================================================
 
-async function startServer() {
-  const isProduction =
-    process.env.NODE_ENV === "production";
+async function startLocalServer() {
+  const {
+    createServer: createViteServer,
+  } = await import("vite");
 
-  if (!isProduction) {
-    const { createServer: createViteServer } =
-      await import("vite");
-
-    const vite = await createViteServer({
+  const vite =
+    await createViteServer({
       server: {
         middlewareMode: true,
       },
@@ -874,23 +955,7 @@ async function startServer() {
       appType: "spa",
     });
 
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(
-      __dirname,
-      "dist"
-    );
-
-    app.use(
-      express.static(distPath)
-    );
-
-    app.get("*", (_req, res) => {
-      res.sendFile(
-        path.join(distPath, "index.html")
-      );
-    });
-  }
+  app.use(vite.middlewares);
 
   const PORT =
     Number(process.env.PORT) || 3000;
@@ -904,7 +969,7 @@ async function startServer() {
         "======================================"
       );
       console.log(
-        `Server running on http://localhost:${PORT}`
+        `Local server: http://localhost:${PORT}`
       );
       console.log(
         `Primary model: ${PRIMARY_MODEL}`
@@ -913,10 +978,10 @@ async function startServer() {
         `Fallback models: ${FALLBACK_MODELS.join(", ")}`
       );
       console.log(
-        "Gemini API key: " +
-          (process.env.GEMINI_API_KEY
-            ? "LOADED"
-            : "MISSING")
+        "Gemini API key:",
+        process.env.GEMINI_API_KEY
+          ? "LOADED"
+          : "MISSING"
       );
       console.log(
         "======================================"
@@ -926,16 +991,28 @@ async function startServer() {
   );
 }
 
-
 // ============================================================
-// START
+// START LOCAL ONLY
 // ============================================================
 
-startServer().catch((error) => {
-  console.error(
-    "Failed to start server:",
-    error
+if (!process.env.VERCEL) {
+  startLocalServer().catch(
+    (error) => {
+      console.error(
+        "Failed to start local server:",
+        error
+      );
+
+      process.exit(1);
+    }
   );
+}
 
-  process.exit(1);
-});
+// ============================================================
+// VERCEL EXPORT
+// ============================================================
+
+// Vercel imports this Express application.
+// Do not call app.listen() on Vercel.
+
+export default app;
