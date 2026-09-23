@@ -1,0 +1,8 @@
+{
+  "name": "AI Study Assistant",
+  "description": "Generate comprehensive study notes, smart summaries, flashcards, and interactive quizzes for any academic topic.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
