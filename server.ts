@@ -1474,16 +1474,21 @@ async function startServer() {
 }
 
 /* =========================================================
-   Startup
+   Local development startup
    ========================================================= */
 
-startServer().catch((err) => {
-  console.error(
-    'Failed to start server:',
-    err,
-  );
+if (
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === __filename
+) {
+  startServer().catch((err) => {
+    console.error(
+      'Failed to start server:',
+      err,
+    );
 
-  process.exit(1);
-});
+    process.exit(1);
+  });
+}
 
 export default app;

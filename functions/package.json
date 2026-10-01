@@ -1,0 +1,22 @@
+{
+  "name": "study-assistant-functions",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "esbuild ../server.ts --bundle --platform=node --format=esm --packages=external --external:vite --outfile=lib/server.mjs"
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.2",
+    "firebase-functions": "^6.4.0",
+    "react-example": "file:.."
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
