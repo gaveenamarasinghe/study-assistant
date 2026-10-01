@@ -181,8 +181,15 @@ async function postJson<T>(
     data = await parseResponse<unknown>(response);
   } catch (parseError) {
     if (!response.ok) {
+      const parseMessage =
+        parseError instanceof Error
+          ? parseError.message
+          : 'Server returned an invalid response.';
+
       throw new Error(
-        getApiErrorMessage(response.status)
+        getApiErrorMessage(response.status, {
+          error: parseMessage,
+        })
       );
     }
 
