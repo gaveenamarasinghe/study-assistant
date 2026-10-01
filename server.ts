@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -1380,6 +1380,40 @@ app.get(
         Boolean(
           process.env.GEMINI_API_KEY?.trim(),
         ),
+    });
+  },
+);
+
+app.use(
+  (
+    err: unknown,
+    _req: Request,
+    res: Response,
+    _next: NextFunction,
+  ) => {
+    console.error('[Unhandled request error]', err);
+
+    const statusCode = Number(
+      (err as { status?: unknown })?.status,
+    );
+    const status =
+      Number.isInteger(statusCode) &&
+      statusCode >= 400 &&
+      statusCode < 500
+        ? statusCode
+        : 500;
+
+    res.status(status).json({
+      error:
+        status === 400
+          ? 'Request body must be valid JSON.'
+          : 'The server could not complete the request.',
+      code:
+        status === 400
+          ? 'INVALID_JSON'
+          : status === 413
+            ? 'REQUEST_TOO_LARGE'
+            : 'INTERNAL_SERVER_ERROR',
     });
   },
 );
